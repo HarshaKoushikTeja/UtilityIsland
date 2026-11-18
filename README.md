@@ -42,7 +42,7 @@ The control panel opens on first launch, and afterwards from the island's icon n
 | Charging, on battery, low battery | Power events |
 | Bluetooth connected | A device connects |
 | Volume | Volume or mute changes |
-| Unlocked | Signing back in |
+| Lock / unlock | The pet falls asleep when the PC locks; on unlock it wakes, stretches and the lock pops open ("Welcome back") |
 
 **Expanded tabs**
 - **Now**: call controls, media controls, timer.

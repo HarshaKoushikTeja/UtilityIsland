@@ -45,6 +45,7 @@ public static class Glyphs
     public const string Bluetooth = "";
     public const string Bolt = "";
     public const string Unlock = "";
+    public const string Lock = "\uE72E";
     public const string Copy = "";
     public const string Stopwatch = "";
     public const string Music = "";

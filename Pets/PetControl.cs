@@ -35,6 +35,9 @@ public sealed class PetControl : Canvas
     private readonly TranslateTransform _move = new();
     private readonly ScaleTransform _flip = new(1, 1, PetWidth / 2, PetHeight / 2);
     private readonly TranslateTransform _bob = new();
+    private readonly ScaleTransform _stretch = new(1, 1, PetWidth / 2, PetHeight);
+    private const double WakeDuration = 1.6;
+    private double _wakeLeft;
     private readonly TranslateTransform _legA = new();
     private readonly TranslateTransform _legB = new();
     private readonly ScaleTransform _eyes = new(1, 1);
@@ -148,6 +151,13 @@ public sealed class PetControl : Canvas
         _hopLeft = 0.6;
     }
 
+    /// <summary>Eyes open slowly, a big stretch, then a happy hop. Played when the PC is unlocked.</summary>
+    public void WakeUp()
+    {
+        Sleeping = false;
+        _wakeLeft = WakeDuration;
+    }
+
     /// <summary>Quick nibbling motion for the given number of seconds.</summary>
     public void Chomp(double seconds)
     {
@@ -173,6 +183,12 @@ public sealed class PetControl : Canvas
         _time += dt;
         if (_hopLeft > 0) _hopLeft -= dt;
         if (_chompLeft > 0) _chompLeft -= dt;
+
+        if (_wakeLeft > 0)
+        {
+            StepWake(dt);
+            return;
+        }
 
         bool seeking = SeekX != null;
         bool reacting = _hopLeft > 0 || _chompLeft > 0;
@@ -279,6 +295,38 @@ public sealed class PetControl : Canvas
         _move.X = _x;
     }
 
+    private void StepWake(double dt)
+    {
+        _wakeLeft -= dt;
+        double p = 1 - Math.Max(0, _wakeLeft) / WakeDuration; // 0 → 1
+
+        if (_zzz != null) _zzz.Visibility = Visibility.Collapsed;
+        _legA.Y = 0;
+        _legB.Y = 0;
+
+        // 0-35%: eyes flutter open.
+        double eyes = Math.Clamp(p / 0.35, 0, 1);
+        _eyes.ScaleY = 0.15 + 0.85 * eyes * (0.7 + 0.3 * Math.Abs(Math.Sin(p * 40)));
+
+        // 35-80%: a long stretch, wide and low, then back.
+        double stretch = p > 0.35 && p < 0.8 ? Math.Sin((p - 0.35) / 0.45 * Math.PI) : 0;
+        _stretch.ScaleX = 1 + 0.2 * stretch;
+        _stretch.ScaleY = 1 - 0.14 * stretch;
+
+        // 80-100%: a little hop.
+        _bob.Y = p >= 0.8 ? -Math.Sin((p - 0.8) / 0.2 * Math.PI) * 3 : 0;
+
+        if (_wakeLeft <= 0)
+        {
+            _eyes.ScaleY = 1;
+            _stretch.ScaleX = 1;
+            _stretch.ScaleY = 1;
+            _bob.Y = 0;
+            ShowLove();
+        }
+        _move.X = _x;
+    }
+
     // ---- drawing -------------------------------------------------------
 
     private void Build()
@@ -291,7 +339,10 @@ public sealed class PetControl : Canvas
         // Everything that turns around with the pet goes in "body".
         var body = new Canvas { Width = PetWidth, Height = PetHeight, RenderTransform = _flip };
         // The part that bobs up and down (everything except the legs).
-        var upper = new Canvas { Width = PetWidth, Height = PetHeight, RenderTransform = _bob };
+        var upperTransform = new TransformGroup();
+        upperTransform.Children.Add(_stretch);
+        upperTransform.Children.Add(_bob);
+        var upper = new Canvas { Width = PetWidth, Height = PetHeight, RenderTransform = upperTransform };
 
         switch (_kind)
         {

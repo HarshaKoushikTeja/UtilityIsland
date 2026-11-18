@@ -125,8 +125,12 @@
                         </Grid.RowDefinitions>
 
                         <TextBlock Text="Display" VerticalAlignment="Center"/>
-                        <ComboBox x:Name="DisplayBox" Grid.Column="1" Width="300" HorizontalAlignment="Left"
-                                  Margin="0,0,0,12" SelectionChanged="Choice_Changed"/>
+                        <StackPanel Grid.Column="1" Margin="0,0,0,12">
+                            <ComboBox x:Name="DisplayBox" Width="300" HorizontalAlignment="Left"
+                                      SelectionChanged="Choice_Changed"/>
+                            <TextBlock x:Name="PlacementText" FontSize="12" Foreground="#777777" TextWrapping="Wrap"
+                                       Margin="0,6,0,0"/>
+                        </StackPanel>
 
                         <TextBlock Grid.Row="1" Text="Position" VerticalAlignment="Center"/>
                         <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,12">
@@ -246,7 +250,7 @@
                     <Button Style="{StaticResource TestBtn}" Content="Low battery" Tag="lowbattery" Click="Test_Click"/>
                     <Button Style="{StaticResource TestBtn}" Content="Bluetooth device" Tag="bluetooth" Click="Test_Click"/>
                     <Button Style="{StaticResource TestBtn}" Content="Volume" Tag="volume" Click="Test_Click"/>
-                    <Button Style="{StaticResource TestBtn}" Content="Unlocked" Tag="unlock" Click="Test_Click"/>
+                    <Button Style="{StaticResource TestBtn}" Content="Lock and unlock" Tag="unlock" Click="Test_Click"/>
                 </WrapPanel>
 
                 <TextBlock Text="Live activities" FontWeight="SemiBold" Margin="0,12,0,8"/>

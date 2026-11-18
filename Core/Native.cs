@@ -10,6 +10,9 @@ internal static class Native
     public const long WS_EX_TOOLWINDOW = 0x00000080L;
     public const long WS_EX_NOACTIVATE = 0x08000000L;
     public const int WM_CLIPBOARDUPDATE = 0x031D;
+    public const int WM_WTSSESSION_CHANGE = 0x02B1;
+    public const int WTS_SESSION_LOCK = 0x7;
+    public const int WTS_SESSION_UNLOCK = 0x8;
     private const int SW_RESTORE = 9;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -175,6 +178,70 @@ internal static class Native
         SetWindowDisplayAffinity(hwnd, hidden ? WDA_EXCLUDEFROMCAPTURE : WDA_NONE);
     }
 
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmGetWindowAttribute(IntPtr hwnd, int attribute, out int value, int size);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int max);
+
+    /// <summary>True for windows Windows keeps "visible" but is not actually drawing (suspended Store apps).</summary>
+    private static bool IsCloaked(IntPtr hwnd)
+    {
+        try
+        {
+            const int DWMWA_CLOAKED = 14;
+            return DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, out int cloaked, sizeof(int)) == 0 && cloaked != 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>A readable name for a window, for the control panel: "Opera GX (opera)".</summary>
+    public static string DescribeWindow(IntPtr hwnd)
+    {
+        string process = "";
+        try
+        {
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+            process = p.ProcessName;
+        }
+        catch
+        {
+            // process already gone
+        }
+
+        var sb = new StringBuilder(128);
+        GetWindowText(hwnd, sb, sb.Capacity);
+        string title = sb.ToString().Trim();
+        if (title.Length > 40) title = title.Substring(0, 40) + "…";
+
+        if (title.Length == 0) return process.Length == 0 ? "an app" : process;
+        return process.Length == 0 ? title : title + " (" + process + ")";
+    }
+
+    [DllImport("wtsapi32.dll")]
+    private static extern bool WTSRegisterSessionNotification(IntPtr hWnd, int flags);
+
+    [DllImport("wtsapi32.dll")]
+    private static extern bool WTSUnRegisterSessionNotification(IntPtr hWnd);
+
+    /// <summary>Asks Windows to send WM_WTSSESSION_CHANGE to this window when the PC locks or unlocks.</summary>
+    public static void WatchSession(IntPtr hwnd)
+    {
+        try { WTSRegisterSessionNotification(hwnd, 0); } catch { }
+    }
+
+    public static void StopWatchingSession(IntPtr hwnd)
+    {
+        try { WTSUnRegisterSessionNotification(hwnd); } catch { }
+    }
+
     [DllImport("kernel32.dll")]
     public static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
 
@@ -253,6 +320,15 @@ internal static class Native
         if (hwnd == IntPtr.Zero || !IsWindow(hwnd) || !IsWindowVisible(hwnd) || IsIconic(hwnd)) return false;
         // A maximized window can be screen-sized (auto-hide taskbar) without being fullscreen.
         if (IsZoomed(hwnd)) return false;
+        // Hidden-but-"visible" Store app windows, click-through overlays (game bars, GPU overlays,
+        // live wallpapers) and our own windows cover the screen without being something to avoid.
+        if (IsCloaked(hwnd)) return false;
+        long ex = GetWindowLongPtr(hwnd, GWL_EXSTYLE).ToInt64();
+        const long WS_EX_TRANSPARENT = 0x20, WS_EX_LAYERED = 0x80000;
+        if ((ex & WS_EX_TOOLWINDOW) != 0 || (ex & WS_EX_NOACTIVATE) != 0) return false;
+        if ((ex & WS_EX_TRANSPARENT) != 0 && (ex & WS_EX_LAYERED) != 0) return false;
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        if (pid == (uint)Environment.ProcessId) return false;
 
         var sb = new StringBuilder(256);
         GetClassName(hwnd, sb, sb.Capacity);

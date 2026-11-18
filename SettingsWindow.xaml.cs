@@ -39,6 +39,13 @@ public partial class SettingsWindow : Window
 
         ShowPage("Pet");
         _loading = false;
+
+        // Live "where is the island and why" line on the Appearance page.
+        var status = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        status.Tick += (_, _) => PlacementText.Text = _island.PlacementStatus;
+        status.Start();
+        Closed += (_, _) => status.Stop();
+        PlacementText.Text = _island.PlacementStatus;
     }
 
     /// <summary>Puts every control in step with the saved settings.</summary>

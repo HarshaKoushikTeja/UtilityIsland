@@ -37,7 +37,7 @@ public partial class MainWindow : Window
     private enum Tab { Home, Audio, Shelf, Clip, Stats }
     private enum Activity { Call, Timer, Media }
 
-    private sealed record Transient(string Glyph, string Text, string Trail, Brush Color);
+    private sealed record Transient(string Glyph, string Text, string Trail, Brush Color, bool KeepPet);
 
     private sealed class AudioRow
     {
@@ -142,6 +142,10 @@ public partial class MainWindow : Window
     private readonly List<IntPtr> _fullscreenWindows = new();
     private bool _paused;
     private bool _growUp;
+    private bool _locked;
+
+    /// <summary>Where the island is and why, shown in the control panel.</summary>
+    public string PlacementStatus { get; private set; } = "";
 
     // Dragging the island around
     private bool _pressed;
@@ -237,6 +241,7 @@ public partial class MainWindow : Window
         // Clipboard history: Windows tells us whenever the clipboard changes.
         HwndSource.FromHwnd(_hwnd)?.AddHook(WndProc);
         Native.AddClipboardFormatListener(_hwnd);
+        Native.WatchSession(_hwnd);
 
         // Another app coming to the front can knock the island out of the always-on-top band; put it back.
         Native.WatchForeground(() =>
@@ -257,7 +262,6 @@ public partial class MainWindow : Window
         _bluetooth.Connected += name => Dispatcher.InvokeAsync(() =>
             ShowTransient(Glyphs.Bluetooth, name, "Connected", Blue, 3));
 
-        SystemEvents.SessionSwitch += OnSessionSwitch;
 
         _audio.Start();
         _bluetooth.Start();
@@ -279,7 +283,7 @@ public partial class MainWindow : Window
 
     private void OnClosed(object? sender, EventArgs e)
     {
-        SystemEvents.SessionSwitch -= OnSessionSwitch;
+        Native.StopWatchingSession(_hwnd);
         Native.StopWatchingForeground();
         Native.RemoveClipboardFormatListener(_hwnd);
         _bluetooth.Stop();
@@ -349,7 +353,9 @@ public partial class MainWindow : Window
                 ShowTransient(Glyphs.Volume, "Volume", "60%", White, 2);
                 break;
             case "unlock":
-                ShowTransient(Glyphs.Unlock, "Unlocked", "", White, 2);
+                // Pretend to lock: the pet falls asleep; then play the real unlock sequence.
+                OnLocked();
+                After(2.5, PlayUnlock);
                 break;
             case "timer":
                 _timerEnd = DateTime.Now.AddSeconds(10);
@@ -401,14 +407,14 @@ public partial class MainWindow : Window
         }
 
         // The pet lives in the middle of the pill. Notifications need the room, so it steps out for those.
-        bool petVisible = App.Settings.PetEnabled && _transient == null;
+        bool petVisible = App.Settings.PetEnabled && (_transient == null || _transient.KeepPet);
         PetHost.Visibility = petVisible ? Visibility.Visible : Visibility.Collapsed;
 
         double width;
         if (_transient != null)
         {
             SetCompact(_transient.Glyph, _transient.Text, _transient.Trail, _transient.Color, false, false);
-            width = 260;
+            width = petVisible ? 300 : 260;
         }
         else if (activities.Count > 0)
         {
@@ -683,9 +689,9 @@ public partial class MainWindow : Window
         PillScale.BeginAnimation(ScaleTransform.ScaleYProperty, y);
     }
 
-    private void ShowTransient(string glyph, string text, string trail, Brush color, double seconds)
+    private void ShowTransient(string glyph, string text, string trail, Brush color, double seconds, bool keepPet = false)
     {
-        _transient = new Transient(glyph, text, trail, color);
+        _transient = new Transient(glyph, text, trail, color, keepPet);
         _transientTimer.Stop();
         _transientTimer.Interval = TimeSpan.FromSeconds(seconds);
         _transientTimer.Start();
@@ -832,7 +838,7 @@ public partial class MainWindow : Window
         UpdatePlacement();
         if (!_paused) Native.KeepOnTop(_hwnd);
 
-        bool asleep = Native.IdleSeconds() > 120;
+        bool asleep = _locked || Native.IdleSeconds() > 120;
         Pet.Sleeping = asleep;
         Playground.Pet.Sleeping = asleep;
 
@@ -917,10 +923,69 @@ public partial class MainWindow : Window
         _lastBattery = power.Percent;
     }
 
-    private void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
+    // ------------------------------------------------------------------
+    // Lock and unlock
+    // ------------------------------------------------------------------
+
+    private void OnLocked()
     {
-        if (e.Reason != SessionSwitchReason.SessionUnlock) return;
-        Dispatcher.InvokeAsync(() => ShowTransient(Glyphs.Unlock, "Unlocked", "", White, 2));
+        _locked = true;
+        SetMode(Mode.Compact);
+        Pet.Sleeping = true;
+        Playground.Pet.Sleeping = true;
+    }
+
+    private void OnUnlocked()
+    {
+        _locked = false;
+        // The desktop takes a moment to reappear after unlocking; play the animation once it's visible.
+        After(0.7, PlayUnlock);
+    }
+
+    /// <summary>Lock icon, the pet wakes up and stretches, then the lock pops open: "Welcome back".</summary>
+    private void PlayUnlock()
+    {
+        _locked = false;
+        bool pet = App.Settings.PetEnabled;
+
+        if (pet)
+        {
+            Pet.WakeUp();
+            Playground.Pet.Sleeping = false;
+        }
+
+        ShowTransient(Glyphs.Lock, "", "", White, 3, keepPet: pet);
+        PopLeadGlyph();
+
+        After(pet ? 1.3 : 0.6, () =>
+        {
+            ShowTransient(Glyphs.Unlock, pet ? "Welcome back" : "Unlocked", "", Green, 2.8, keepPet: pet);
+            PopLeadGlyph();
+        });
+    }
+
+    /// <summary>A quick springy pop on the compact icon.</summary>
+    private void PopLeadGlyph()
+    {
+        var scale = new ScaleTransform(1, 1);
+        LeadGlyph.RenderTransformOrigin = new Point(0.5, 0.5);
+        LeadGlyph.RenderTransform = scale;
+        var ease = new BackEase { EasingMode = EasingMode.EaseOut, Amplitude = 0.8 };
+        var pop = new DoubleAnimation(0.4, 1, TimeSpan.FromMilliseconds(380)) { EasingFunction = ease };
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, pop);
+        scale.BeginAnimation(ScaleTransform.ScaleYProperty, pop);
+    }
+
+    /// <summary>Runs an action once, after a delay, on the UI thread.</summary>
+    private void After(double seconds, Action action)
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(seconds) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            action();
+        };
+        timer.Start();
     }
 
     private void OnVolumeChanged(float volume, bool muted)
@@ -955,6 +1020,7 @@ public partial class MainWindow : Window
         // Which displays are taken by fullscreen apps? Track every one we have seen, not only the
         // focused one, so a game left running on one display still counts after you click away.
         var busy = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var busyBy = new Dictionary<string, IntPtr>(StringComparer.OrdinalIgnoreCase);
         if (settings.HideOnFullscreen)
         {
             IntPtr foreground = Native.ForegroundWindow();
@@ -965,8 +1031,15 @@ public partial class MainWindow : Window
 
             for (int i = _fullscreenWindows.Count - 1; i >= 0; i--)
             {
-                if (Native.IsFullscreen(_fullscreenWindows[i], out string name)) busy.Add(name);
-                else _fullscreenWindows.RemoveAt(i);
+                if (Native.IsFullscreen(_fullscreenWindows[i], out string name))
+                {
+                    busy.Add(name);
+                    busyBy[name] = _fullscreenWindows[i];
+                }
+                else
+                {
+                    _fullscreenWindows.RemoveAt(i);
+                }
             }
         }
         else
@@ -990,10 +1063,23 @@ public partial class MainWindow : Window
                              .FirstOrDefault();
         }
 
+        string chosen = settings.DisplayName.Length == 0 ? "the main display" : "your chosen display";
         if (target == null)
         {
+            PlacementStatus = "Paused: every display has a fullscreen app (" +
+                              string.Join(", ", busyBy.Values.Select(Native.DescribeWindow)) + ").";
             SetPaused(true);
             return;
+        }
+
+        if (target == preferred)
+        {
+            PlacementStatus = "Showing on " + target.Label + " (" + chosen + ").";
+        }
+        else
+        {
+            PlacementStatus = "Showing on " + target.Label + " because " + Native.DescribeWindow(busyBy[preferred.Name]) +
+                              " is fullscreen on " + chosen + ".";
         }
 
         SetPaused(false);
@@ -1731,6 +1817,12 @@ public partial class MainWindow : Window
     private IntPtr WndProc(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (message == Native.WM_CLIPBOARDUPDATE) OnClipboardChanged();
+        if (message == Native.WM_WTSSESSION_CHANGE)
+        {
+            int reason = wParam.ToInt32();
+            if (reason == Native.WTS_SESSION_LOCK) OnLocked();
+            else if (reason == Native.WTS_SESSION_UNLOCK) OnUnlocked();
+        }
         return IntPtr.Zero;
     }
 
